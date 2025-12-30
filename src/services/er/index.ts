@@ -3,6 +3,20 @@ import Field from '@dbml/core/types/model_structure/field';
 import Ref from '@dbml/core/types/model_structure/ref';
 import Table from '@dbml/core/types/model_structure/table';
 
+// Helper function to extract color from table note
+// Note format: "group: Keycloak, color: #6724BB" or just "color: #FF6B6B"
+function extractColorFromNote(note: string | null): string | null {
+  if (!note) return null;
+
+  // Match "color: #RRGGBB" or "color:#RRGGBB"
+  const colorMatch = note.match(/color:\s*(#[0-9A-Fa-f]{6})/);
+  if (colorMatch && colorMatch[1]) {
+    return colorMatch[1];
+  }
+
+  return null;
+}
+
 function parseFieldToPort(
   field: Field,
   schemaName: string,
@@ -56,14 +70,40 @@ function parseTableToNode(table: Table, schemaName: string): any {
     const note = parseNoteToPort(table.note, schemaName, table.name);
     fields.push(note);
   }
-  return {
+
+  // Extract color from table note
+  const color = extractColorFromNote(table.note);
+
+  const node: any = {
     id: `${schemaName}-${table.name}`,
     shape: 'er-rect',
     label: table.name,
     width: 150,
     height: 24,
+    zIndex: 10, // Above containers for clickability
     ports: fields,
   };
+
+  // Add color to node data if present
+  if (color) {
+    node.data = { color };
+  }
+
+  return node;
+}
+
+// Map DBML relation to crow's foot marker
+function getMarkerForRelation(relation: string): string {
+  // DBML relations: '1' (one), '*' (many), '1..1', '0..1', '0..*', etc.
+  if (relation === '*' || relation === '0..*') {
+    return 'crowfoot'; // Many (crow's foot)
+  } else if (relation === '1' || relation === '1..1') {
+    return 'one'; // One (perpendicular line)
+  } else if (relation === '0..1') {
+    return 'zeroOrOne'; // Zero or one (circle + line)
+  } else {
+    return 'one'; // Default to one
+  }
 }
 
 function parseRef(ref: Ref): any {
@@ -78,6 +118,10 @@ function parseRef(ref: Ref): any {
   const targetFieldName = target.fieldNames[0];
   const sSchemaName = source.schemaName || 'public';
   const tSchemaName = target.schemaName || 'public';
+
+  // Get crow's foot markers for source and target
+  const sourceMarker = getMarkerForRelation(source.relation);
+  const targetMarker = getMarkerForRelation(target.relation);
 
   return {
     id: ``,
@@ -98,12 +142,27 @@ function parseRef(ref: Ref): any {
       cell: `${tSchemaName}-${target.tableName}`,
       port: `${tSchemaName}-${target.tableName}-${targetFieldName}`,
     },
+    attrs: {
+      line: {
+        stroke: '#5F95FF',
+        strokeWidth: 2,
+        sourceMarker: {
+          name: sourceMarker,
+          size: 8,
+        },
+        targetMarker: {
+          name: targetMarker,
+          size: 8,
+        },
+      },
+    },
     labels: [
       {
         attrs: {
           label: {
             text: source.relation,
             fontFamily: 'monospace',
+            fontSize: 10,
           },
         },
         position: 0.2,
@@ -113,6 +172,7 @@ function parseRef(ref: Ref): any {
           label: {
             text: target.relation,
             fontFamily: 'monospace',
+            fontSize: 10,
           },
         },
         position: 0.8,
@@ -121,20 +181,69 @@ function parseRef(ref: Ref): any {
   };
 }
 
-function parseDatabaseToER(database: Database): any {
+function parseDatabaseToER(
+  database: Database,
+  tableGroupColors?: Record<string, string>,
+): any {
   // parse nodes
   let nodes: any[] = [];
+  let groupContainers: any[] = [];
+
   for (let i = 0; i < database.schemas.length; i++) {
     const schema = database.schemas[i];
+
+    // Create TableGroup containers
+    if (schema.tableGroups && schema.tableGroups.length > 0) {
+      for (let g = 0; g < schema.tableGroups.length; g++) {
+        const group = schema.tableGroups[g];
+        const tableNames = group.tables.map((t: any) => t.name);
+
+        // Extract color: first check tableGroupColors, then first table's note
+        let groupColor = '#8B8B8B'; // default gray
+
+        // Priority 1: TableGroup [color: ...] syntax (preprocessed)
+        if (tableGroupColors && tableGroupColors[group.name]) {
+          groupColor = tableGroupColors[group.name];
+        }
+        // Priority 2: First table's note color
+        else if (group.tables.length > 0) {
+          const firstTable = group.tables[0];
+          const extractedColor = extractColorFromNote(firstTable.note);
+          if (extractedColor) {
+            groupColor = extractedColor;
+          }
+        }
+
+        groupContainers.push({
+          id: `${schema.name}-group-${group.name}`,
+          shape: 'table-group',
+          label: group.name,
+          width: 400,
+          height: 300,
+          zIndex: 0, // Above background, below tables
+          movable: true, // Explicitly enable dragging
+          attrs: {
+            body: {
+              pointerEvents: 'none', // Let clicks pass through to header
+            },
+          },
+          data: {
+            tableNames,
+            color: groupColor,
+          },
+        });
+      }
+    }
+
+    // Create table nodes
     for (let j = 0; j < database.schemas[i].tables.length; j++) {
       const table = database.schemas[i].tables[j];
-      // handle fields
       const node = parseTableToNode(table, schema.name);
       nodes.push(node);
     }
   }
 
-  // passe edges
+  // parse edges
   let edges: any[] = [];
   for (let i = 0; i < database.schemas.length; i++) {
     const schema = database.schemas[i];
@@ -149,7 +258,8 @@ function parseDatabaseToER(database: Database): any {
     }
   }
 
-  return { nodes: nodes, edges: edges };
+  // Add group containers to nodes (at the beginning so they render first)
+  return { nodes: [...groupContainers, ...nodes], edges: edges };
 }
 
 export default parseDatabaseToER;

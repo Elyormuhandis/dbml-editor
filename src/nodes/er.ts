@@ -4,6 +4,43 @@ const LINE_HEIGHT = 24;
 const NODE_WIDTH = 150;
 
 function registerER() {
+  // Register custom crow's foot notation markers
+  Graph.registerMarker(
+    'crowfoot',
+    (nodeSize) => ({
+      tagName: 'path',
+      d: 'M 0,-5 L 10,0 L 0,5 M 10,0 L 10,0',
+      stroke: '#5F95FF',
+      strokeWidth: 2,
+      fill: 'none',
+    }),
+    true,
+  );
+
+  Graph.registerMarker(
+    'one',
+    (nodeSize) => ({
+      tagName: 'path',
+      d: 'M 0,-5 L 0,5',
+      stroke: '#5F95FF',
+      strokeWidth: 2,
+      fill: 'none',
+    }),
+    true,
+  );
+
+  Graph.registerMarker(
+    'zeroOrOne',
+    (nodeSize) => ({
+      tagName: 'path',
+      d: 'M 0,-5 L 0,5 M 0,0 L -8,0 M -8,0 a 4,4 0 1,0 0,0.01',
+      stroke: '#5F95FF',
+      strokeWidth: 2,
+      fill: 'none',
+    }),
+    true,
+  );
+
   Graph.registerPortLayout(
     'erPortPosition',
     (portsPositionArgs) => {
@@ -30,6 +67,61 @@ function registerER() {
           },
         };
       });
+    },
+    true,
+  );
+
+  // Register TableGroup container node
+  Graph.registerNode(
+    'table-group',
+    {
+      inherit: 'rect',
+      markup: [
+        {
+          tagName: 'rect',
+          selector: 'body',
+        },
+        {
+          tagName: 'rect',
+          selector: 'header',
+        },
+        {
+          tagName: 'text',
+          selector: 'label',
+        },
+      ],
+      attrs: {
+        rect: {
+          strokeWidth: 2,
+          stroke: '#8B8B8B',
+          fill: 'rgba(139, 139, 139, 0.15)', // Light gray background (15% opacity)
+          rx: 8,
+          ry: 8,
+        },
+        body: {
+          pointerEvents: 'none', // Container cannot receive events - let tables be draggable
+        },
+        header: {
+          // Drag handle area at the top
+          refWidth: '100%',
+          height: 30,
+          fill: 'rgba(139, 139, 139, 0.3)', // Slightly darker for visibility
+          stroke: 'none',
+          cursor: 'move',
+          pointerEvents: 'all', // This is the primary drag handle
+          rx: 8,
+          ry: 8,
+        },
+        label: {
+          fontWeight: 'bold',
+          fill: '#8B8B8B',
+          fontSize: 14,
+          refX: 10,
+          refY: 10,
+          textAnchor: 'start',
+          pointerEvents: 'none', // Don't block header clicks
+        },
+      },
     },
     true,
   );
