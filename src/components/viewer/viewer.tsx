@@ -1,13 +1,19 @@
 import parseDatabaseToER from '@/services/er';
 import {
+  loadCollapsedGroups,
   loadDiagramState,
+  loadGroupSizes,
   loadZoom,
+  saveCollapsedGroups,
+  saveGroupSizes,
   saveNodePositions,
   saveZoom,
+  type GroupSize,
 } from '@/services/storage';
 import { DagreLayout } from '@antv/layout';
 import { Graph, Model } from '@antv/x6';
 import { Snapline } from '@antv/x6-plugin-snapline';
+import { Transform } from '@antv/x6-plugin-transform';
 import { debounce } from 'lodash-es';
 import React, { useEffect, useRef, useState } from 'react';
 import ZoomControls from './ZoomControls';
@@ -15,6 +21,7 @@ import ZoomControls from './ZoomControls';
 interface Props {
   database: any;
   tableGroupColors?: Record<string, string>;
+  tableGroupNotes?: Record<string, string>;
 }
 
 interface NodePosition {
@@ -22,14 +29,178 @@ interface NodePosition {
   y: number;
 }
 
+// Helper: Apply colors to table nodes
+const applyTableColors = (tables: any[]) => {
+  tables.forEach((node) => {
+    const color = node.getData()?.color;
+    if (color) {
+      node.setAttrs({
+        rect: {
+          stroke: color,
+          fill: color,
+        },
+      });
+      node.getPorts().forEach((port: any) => {
+        if (port.group === 'list') {
+          node.portProp(port.id!, 'attrs/portBody/stroke', color);
+        }
+      });
+    }
+  });
+};
+
+// Helper: Style a single TableGroup container
+const styleTableGroup = (
+  groupNode: any,
+  tables: any[],
+  options: {
+    silent?: boolean;
+    isCollapsed?: boolean;
+    manualSize?: GroupSize;
+  } = {},
+) => {
+  const groupData = groupNode.getData();
+  const tableNames = groupData?.tableNames || [];
+  const color = groupData?.color || '#8B8B8B';
+  const note = groupData?.note || '';
+  const groupName =
+    groupData?.name || groupNode.getAttrByPath('label/text') || 'Group';
+  const isCollapsed = options.isCollapsed || false;
+  const manualSize = options.manualSize;
+
+  // Find all tables in this group
+  const groupTables = tables.filter((table) => {
+    const tableName = table.id.split('-').pop();
+    return tableNames.includes(tableName);
+  });
+
+  // Extract RGB from hex color
+  const r = parseInt(color.slice(1, 3), 16);
+  const g = parseInt(color.slice(3, 5), 16);
+  const b = parseInt(color.slice(5, 7), 16);
+  const bgColor = `rgba(${r}, ${g}, ${b}, 0.15)`;
+
+  if (isCollapsed) {
+    // Hide all child tables
+    groupTables.forEach((table) => {
+      table.setVisible(false);
+    });
+
+    // Show compact collapsed view
+    const collapsedWidth = 200;
+    const collapsedHeight = 40;
+
+    // Resize to compact (position is preserved automatically)
+    groupNode.resize(collapsedWidth, collapsedHeight);
+
+    groupNode.setAttrs({
+      body: {
+        stroke: color,
+        fill: bgColor,
+      },
+      header: {
+        fill: `rgba(${r}, ${g}, ${b}, 0.3)`,
+      },
+      collapseBtn: {
+        text: '+', // Plus sign for collapsed state
+      },
+      label: {
+        text: `${groupName} (${groupTables.length})`,
+        fill: color,
+      },
+      noteIcon: {
+        text: note ? 'i' : '',
+      },
+      noteTooltip: {
+        text: note,
+      },
+    });
+    return;
+  }
+
+  // Show all child tables
+  groupTables.forEach((table) => {
+    table.setVisible(true);
+  });
+
+  if (groupTables.length === 0) return;
+
+  // Calculate bounding box for all tables in group
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+
+  groupTables.forEach((table) => {
+    const bbox = table.getBBox();
+    minX = Math.min(minX, bbox.x);
+    minY = Math.min(minY, bbox.y);
+    maxX = Math.max(maxX, bbox.x + bbox.width);
+    maxY = Math.max(maxY, bbox.y + bbox.height);
+  });
+
+  // Add padding
+  const padding = 40;
+  const labelHeight = 30;
+
+  // Position and size the group container
+  const containerX = minX - padding;
+  const containerY = minY - padding - labelHeight;
+
+  groupNode.position(containerX, containerY, { silent: options.silent });
+
+  // Use manual size if set, otherwise calculate from tables
+  if (manualSize?.isManual) {
+    groupNode.resize(manualSize.width, manualSize.height);
+  } else {
+    groupNode.resize(
+      maxX - minX + padding * 2,
+      maxY - minY + padding * 2 + labelHeight,
+    );
+  }
+
+  // Apply color and styling
+  groupNode.setAttrs({
+    body: {
+      stroke: color,
+      fill: bgColor,
+    },
+    header: {
+      fill: `rgba(${r}, ${g}, ${b}, 0.3)`,
+    },
+    collapseBtn: {
+      text: '−', // Minus sign for expanded state
+    },
+    label: {
+      text: groupName,
+      fill: color,
+    },
+    noteIcon: {
+      text: note ? 'i' : '',
+    },
+    noteTooltip: {
+      text: note,
+    },
+  });
+};
+
 // Viewer is a component that renders the ER diagram
 const Viewer: React.FC<Props> = (props: Props) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [savedPositions, setSavedPositions] = useState<Record<string, NodePosition> | null>(
-    null,
-  );
+  const [savedPositions, setSavedPositions] = useState<Record<
+    string,
+    NodePosition
+  > | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
+    return new Set(loadCollapsedGroups());
+  });
+  const [groupManualSizes, setGroupManualSizes] = useState<
+    Record<string, GroupSize>
+  >(() => {
+    return loadGroupSizes();
+  });
 
   // Create dagreLayout once using useRef to avoid recreating on every render
   const dagreLayoutRef = useRef(
@@ -44,6 +215,37 @@ const Viewer: React.FC<Props> = (props: Props) => {
   );
 
   const updateTableGroupPositionsRef = useRef<(() => void) | null>(null);
+
+  // Group dragging state refs
+  const isGroupDraggingRef = useRef<boolean>(false);
+  const groupDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const childTableStartPositionsRef = useRef<
+    Map<string, { x: number; y: number }>
+  >(new Map());
+  const currentDragGroupRef = useRef<string | null>(null);
+
+  // Collapsed groups ref for access in event handlers
+  const collapsedGroupsRef = useRef<Set<string>>(collapsedGroups);
+  collapsedGroupsRef.current = collapsedGroups;
+
+  // Manual sizes ref for access in event handlers
+  const groupManualSizesRef =
+    useRef<Record<string, GroupSize>>(groupManualSizes);
+  groupManualSizesRef.current = groupManualSizes;
+
+  // Toggle collapse handler
+  const handleCollapseToggle = (groupId: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      saveCollapsedGroups(Array.from(next));
+      return next;
+    });
+  };
 
   // Create debounced functions once using useRef
   const debouncedSaveZoomRef = useRef(
@@ -123,6 +325,19 @@ const Viewer: React.FC<Props> = (props: Props) => {
         }),
       );
 
+      // Enable resizing for table-group nodes only
+      graph.use(
+        new Transform({
+          resizing: {
+            enabled: (node) => node.shape === 'table-group',
+            minWidth: 150,
+            minHeight: 50,
+            preserveAspectRatio: false,
+          },
+          rotating: false,
+        }),
+      );
+
       // Listen to zoom changes
       graph.on('scale', ({ sx }) => {
         setZoom(sx);
@@ -131,20 +346,118 @@ const Viewer: React.FC<Props> = (props: Props) => {
       });
 
       // Track node position before drag starts
-      const dragStartPositions = new Map<string, { x: number; y: number }>();
-
       graph.on('node:mousedown', ({ node }) => {
-        const pos = node.position();
-        dragStartPositions.set(node.id, { x: pos.x, y: pos.y });
+        // Detect if clicking on table-group (for group dragging)
+        if (node.shape === 'table-group') {
+          const pos = node.position();
+          isGroupDraggingRef.current = true;
+          groupDragStartRef.current = { x: pos.x, y: pos.y };
+          currentDragGroupRef.current = node.id;
+
+          // Store starting positions of all child tables
+          const groupData = node.getData();
+          const tableNames = groupData?.tableNames || [];
+          const tables = graph.getNodes().filter((n) => n.shape === 'er-rect');
+
+          childTableStartPositionsRef.current.clear();
+          tables.forEach((table) => {
+            const tableName = table.id.split('-').pop();
+            if (tableNames.includes(tableName)) {
+              const tablePos = table.position();
+              childTableStartPositionsRef.current.set(table.id, {
+                x: tablePos.x,
+                y: tablePos.y,
+              });
+            }
+          });
+        }
+      });
+
+      // Handle group dragging - move all child tables together
+      graph.on('node:moving', ({ node }) => {
+        if (node.shape === 'table-group' && isGroupDraggingRef.current) {
+          const groupStart = groupDragStartRef.current;
+          if (!groupStart) return;
+
+          const currentPos = node.position();
+          const dx = currentPos.x - groupStart.x;
+          const dy = currentPos.y - groupStart.y;
+
+          // Move all child tables by the same delta
+          childTableStartPositionsRef.current.forEach((startPos, tableId) => {
+            const table = graph.getCellById(tableId);
+            if (table) {
+              table.position(startPos.x + dx, startPos.y + dy, {
+                silent: true,
+              });
+            }
+          });
+        }
       });
 
       // Listen to position changes during drag for real-time updates
       graph.on('node:change:position', ({ node }) => {
+        // Skip container update if we're dragging the group itself
+        if (isGroupDraggingRef.current) return;
+
         if (node.shape === 'er-rect') {
           // Real-time container update when table is being dragged
           if (updateTableGroupPositionsRef.current) {
             updateTableGroupPositionsRef.current();
           }
+        }
+      });
+
+      // Reset group dragging state on mouse up
+      graph.on('node:mouseup', () => {
+        if (isGroupDraggingRef.current) {
+          isGroupDraggingRef.current = false;
+          groupDragStartRef.current = null;
+          currentDragGroupRef.current = null;
+          childTableStartPositionsRef.current.clear();
+        }
+      });
+
+      // Handle collapse button click
+      graph.on('node:click', ({ node, e }) => {
+        if (node.shape === 'table-group') {
+          // Check if click is on collapse button (left side of header, first 25px)
+          const localX = e.offsetX;
+          if (localX < 25) {
+            handleCollapseToggle(node.id);
+          }
+        }
+      });
+
+      // Handle manual resize of table-group
+      graph.on('node:resized', ({ node }) => {
+        if (node.shape === 'table-group') {
+          const size = node.getSize();
+          setGroupManualSizes((prev) => {
+            const next = {
+              ...prev,
+              [node.id]: {
+                width: size.width,
+                height: size.height,
+                isManual: true,
+              },
+            };
+            saveGroupSizes(next);
+            return next;
+          });
+        }
+      });
+
+      // Double-click to reset manual size
+      graph.on('node:dblclick', ({ node }) => {
+        if (node.shape === 'table-group') {
+          // Reset to auto-size
+          setGroupManualSizes((prev) => {
+            const next = { ...prev };
+            delete next[node.id];
+            saveGroupSizes(next);
+            return next;
+          });
         }
       });
 
@@ -184,7 +497,11 @@ const Viewer: React.FC<Props> = (props: Props) => {
   // Update graph data when database changes
   useEffect(() => {
     if (graphRef.current && props.database) {
-      const erModel = parseDatabaseToER(props.database, props.tableGroupColors);
+      const erModel = parseDatabaseToER(
+        props.database,
+        props.tableGroupColors,
+        props.tableGroupNotes,
+      );
       let layoutedModel = dagreLayoutRef.current.layout(erModel);
 
       // Merge with saved positions if available
@@ -199,94 +516,26 @@ const Viewer: React.FC<Props> = (props: Props) => {
       graphRef.current.fromJSON(layoutedModel);
 
       // Apply custom colors and position TableGroups
-      const tableGroups = graphRef.current.getNodes().filter((n) => n.shape === 'table-group');
-      const tables = graphRef.current.getNodes().filter((n) => n.shape === 'er-rect');
+      const tableGroups = graphRef.current
+        .getNodes()
+        .filter((n) => n.shape === 'table-group');
+      const tables = graphRef.current
+        .getNodes()
+        .filter((n) => n.shape === 'er-rect');
 
-      // First, apply colors to table nodes
-      tables.forEach((node) => {
-        const color = node.getData()?.color;
-        if (color) {
-          node.setAttrs({
-            rect: {
-              stroke: color,
-              fill: color,
-            },
-          });
-          // Also update port colors to match
-          node.getPorts().forEach((port: any) => {
-            if (port.group === 'list') {
-              node.portProp(port.id!, 'attrs/portBody/stroke', color);
-            }
-          });
-        }
-      });
+      // Apply colors to table nodes
+      applyTableColors(tables);
 
       // Position and style TableGroup containers
-      // This MUST happen after tables are positioned by layout
       const updateTableGroupPositions = () => {
         tableGroups.forEach((groupNode) => {
-          const groupData = groupNode.getData();
-          const tableNames = groupData?.tableNames || [];
-          const color = groupData?.color || '#8B8B8B';
-
-          // Find all tables in this group
-          const groupTables = tables.filter((table) => {
-            const tableName = table.id.split('-').pop(); // Extract table name from id
-            return tableNames.includes(tableName);
+          const isCollapsed = collapsedGroupsRef.current.has(groupNode.id);
+          const manualSize = groupManualSizesRef.current[groupNode.id];
+          styleTableGroup(groupNode, tables, {
+            silent: true,
+            isCollapsed,
+            manualSize,
           });
-
-          if (groupTables.length === 0) return;
-
-          // Calculate bounding box for all tables in group
-          // Use getBBox() to get actual rendered size including all ports
-          let minX = Infinity,
-            minY = Infinity,
-            maxX = -Infinity,
-            maxY = -Infinity;
-
-          groupTables.forEach((table) => {
-            const bbox = table.getBBox();
-            minX = Math.min(minX, bbox.x);
-            minY = Math.min(minY, bbox.y);
-            maxX = Math.max(maxX, bbox.x + bbox.width);
-            maxY = Math.max(maxY, bbox.y + bbox.height);
-          });
-
-          // Add padding
-          const padding = 40;
-          const labelHeight = 30;
-
-          // Position and size the group container
-          const containerX = minX - padding;
-          const containerY = minY - padding - labelHeight;
-
-          // CRITICAL FIX: Don't use parent-child to avoid double-movement
-          // Just position the container directly - it will follow tables manually
-          groupNode.position(containerX, containerY, { silent: true });
-          groupNode.resize(maxX - minX + padding * 2, maxY - minY + padding * 2 + labelHeight);
-
-          // Apply color to group container with semi-transparent background
-          // Extract RGB from hex color
-          const r = parseInt(color.slice(1, 3), 16);
-          const g = parseInt(color.slice(3, 5), 16);
-          const b = parseInt(color.slice(5, 7), 16);
-          const bgColor = `rgba(${r}, ${g}, ${b}, 0.15)`; // 15% opacity for visibility
-
-          groupNode.setAttrs({
-            body: {
-              stroke: color,
-              fill: bgColor,
-            },
-            header: {
-              fill: `rgba(${r}, ${g}, ${b}, 0.3)`, // Darker header for drag handle
-            },
-            label: {
-              fill: color,
-            },
-          });
-
-          // NOTE: NOT using setParent() to avoid double-movement bug
-          // Container follows tables manually via updateTableGroupPositions()
         });
       };
 
@@ -301,81 +550,38 @@ const Viewer: React.FC<Props> = (props: Props) => {
         graphRef.current.centerContent();
       }
     }
-  }, [props.database, savedPositions]);
+  }, [props.database, savedPositions, collapsedGroups, groupManualSizes]);
 
   const handleClearPositions = () => {
-    // Clear saved positions and trigger re-layout
+    // Clear saved positions and manual sizes, trigger re-layout
     setSavedPositions(null);
+    setGroupManualSizes({});
+    saveGroupSizes({});
 
     // Re-render with fresh Dagre layout
     if (graphRef.current && props.database) {
-      const erModel = parseDatabaseToER(props.database, props.tableGroupColors);
+      const erModel = parseDatabaseToER(
+        props.database,
+        props.tableGroupColors,
+        props.tableGroupNotes,
+      );
       const layoutedModel = dagreLayoutRef.current.layout(erModel);
 
       graphRef.current.clearCells();
       graphRef.current.fromJSON(layoutedModel);
 
-      // Apply custom colors and position TableGroups (same as in useEffect)
-      const tableGroups = graphRef.current.getNodes().filter((n) => n.shape === 'table-group');
-      const tables = graphRef.current.getNodes().filter((n) => n.shape === 'er-rect');
+      // Apply custom colors and position TableGroups
+      const tableGroups = graphRef.current
+        .getNodes()
+        .filter((n) => n.shape === 'table-group');
+      const tables = graphRef.current
+        .getNodes()
+        .filter((n) => n.shape === 'er-rect');
 
-      tables.forEach((node) => {
-        const color = node.getData()?.color;
-        if (color) {
-          node.setAttrs({
-            rect: {
-              stroke: color,
-              fill: color,
-            },
-          });
-          node.getPorts().forEach((port: any) => {
-            if (port.group === 'list') {
-              node.portProp(port.id!, 'attrs/portBody/stroke', color);
-            }
-          });
-        }
-      });
-
+      applyTableColors(tables);
       tableGroups.forEach((groupNode) => {
-        const groupData = groupNode.getData();
-        const tableNames = groupData?.tableNames || [];
-        const color = groupData?.color || '#8B8B8B';
-
-        const groupTables = tables.filter((table) => {
-          const tableName = table.id.split('-').pop();
-          return tableNames.includes(tableName);
-        });
-
-        if (groupTables.length > 0) {
-          let minX = Infinity,
-            minY = Infinity,
-            maxX = -Infinity,
-            maxY = -Infinity;
-          groupTables.forEach((table) => {
-            const bbox = table.getBBox();
-            minX = Math.min(minX, bbox.x);
-            minY = Math.min(minY, bbox.y);
-            maxX = Math.max(maxX, bbox.x + bbox.width);
-            maxY = Math.max(maxY, bbox.y + bbox.height);
-          });
-
-          const padding = 40;
-          const labelHeight = 30;
-          groupNode.position(minX - padding, minY - padding - labelHeight);
-          groupNode.resize(maxX - minX + padding * 2, maxY - minY + padding * 2 + labelHeight);
-
-          // Apply color with semi-transparent background
-          const r = parseInt(color.slice(1, 3), 16);
-          const g = parseInt(color.slice(3, 5), 16);
-          const b = parseInt(color.slice(5, 7), 16);
-          const bgColor = `rgba(${r}, ${g}, ${b}, 0.15)`; // 15% opacity for visibility
-
-          groupNode.setAttrs({
-            body: { stroke: color, fill: bgColor },
-            header: { fill: `rgba(${r}, ${g}, ${b}, 0.3)` },
-            label: { fill: color },
-          });
-        }
+        const isCollapsed = collapsedGroupsRef.current.has(groupNode.id);
+        styleTableGroup(groupNode, tables, { isCollapsed });
       });
 
       graphRef.current.centerContent();

@@ -3,15 +3,28 @@ import Field from '@dbml/core/types/model_structure/field';
 import Ref from '@dbml/core/types/model_structure/ref';
 import Table from '@dbml/core/types/model_structure/table';
 
+// Helper function to expand 3-digit hex to 6-digit
+function expandHexColor(color: string): string {
+  if (color.length === 4) {
+    const r = color[1];
+    const g = color[2];
+    const b = color[3];
+    return `#${r}${r}${g}${g}${b}${b}`.toUpperCase();
+  }
+  return color.toUpperCase();
+}
+
 // Helper function to extract color from table note
-// Note format: "group: Keycloak, color: #6724BB" or just "color: #FF6B6B"
+// Note format: "group: Keycloak, color: #6724BB" or just "color: #FF6B6B" or "color: #F00"
 function extractColorFromNote(note: string | null): string | null {
   if (!note) return null;
 
-  // Match "color: #RRGGBB" or "color:#RRGGBB"
-  const colorMatch = note.match(/color:\s*(#[0-9A-Fa-f]{6})/);
+  // Match "color: #RRGGBB" or "color: #RGB" (3 or 6 digit hex)
+  const colorMatch = note.match(
+    /color:\s*(#[0-9A-Fa-f]{3}(?:[0-9A-Fa-f]{3})?)/,
+  );
   if (colorMatch && colorMatch[1]) {
-    return colorMatch[1];
+    return expandHexColor(colorMatch[1]);
   }
 
   return null;
@@ -124,7 +137,7 @@ function parseRef(ref: Ref): any {
   const targetMarker = getMarkerForRelation(target.relation);
 
   return {
-    id: ``,
+    id: `${sSchemaName}-${source.tableName}-${sourceFieldName}-to-${tSchemaName}-${target.tableName}-${targetFieldName}`,
     shape: 'edge',
     router: {
       name: 'er',
@@ -184,6 +197,7 @@ function parseRef(ref: Ref): any {
 function parseDatabaseToER(
   database: Database,
   tableGroupColors?: Record<string, string>,
+  tableGroupNotes?: Record<string, string>,
 ): any {
   // parse nodes
   let nodes: any[] = [];
@@ -214,6 +228,9 @@ function parseDatabaseToER(
           }
         }
 
+        // Get note if present
+        const groupNote = tableGroupNotes?.[group.name] || '';
+
         groupContainers.push({
           id: `${schema.name}-group-${group.name}`,
           shape: 'table-group',
@@ -230,6 +247,8 @@ function parseDatabaseToER(
           data: {
             tableNames,
             color: groupColor,
+            note: groupNote,
+            name: group.name,
           },
         });
       }
@@ -253,7 +272,6 @@ function parseDatabaseToER(
       if (edge === null) {
         continue;
       }
-      console.log(edge);
       edges.push(edge);
     }
   }

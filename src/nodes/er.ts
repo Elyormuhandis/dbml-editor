@@ -7,7 +7,7 @@ function registerER() {
   // Register custom crow's foot notation markers
   Graph.registerMarker(
     'crowfoot',
-    (nodeSize) => ({
+    () => ({
       tagName: 'path',
       d: 'M 0,-5 L 10,0 L 0,5 M 10,0 L 10,0',
       stroke: '#5F95FF',
@@ -19,7 +19,7 @@ function registerER() {
 
   Graph.registerMarker(
     'one',
-    (nodeSize) => ({
+    () => ({
       tagName: 'path',
       d: 'M 0,-5 L 0,5',
       stroke: '#5F95FF',
@@ -31,7 +31,7 @@ function registerER() {
 
   Graph.registerMarker(
     'zeroOrOne',
-    (nodeSize) => ({
+    () => ({
       tagName: 'path',
       d: 'M 0,-5 L 0,5 M 0,0 L -8,0 M -8,0 a 4,4 0 1,0 0,0.01',
       stroke: '#5F95FF',
@@ -59,7 +59,7 @@ function registerER() {
   Graph.registerPortLayout(
     'erNotePosition',
     (portsPositionArgs) => {
-      return portsPositionArgs.map((_, index) => {
+      return portsPositionArgs.map(() => {
         return {
           position: {
             x: 0,
@@ -87,7 +87,19 @@ function registerER() {
         },
         {
           tagName: 'text',
+          selector: 'collapseBtn',
+        },
+        {
+          tagName: 'text',
           selector: 'label',
+        },
+        {
+          tagName: 'text',
+          selector: 'noteIcon',
+        },
+        {
+          tagName: 'title',
+          selector: 'noteTooltip',
         },
       ],
       attrs: {
@@ -112,14 +124,41 @@ function registerER() {
           rx: 8,
           ry: 8,
         },
+        collapseBtn: {
+          text: '−', // Minus sign for expanded state
+          refX: 12,
+          refY: 20,
+          fontSize: 16,
+          fontWeight: 'bold',
+          fill: '#666',
+          cursor: 'pointer',
+          pointerEvents: 'all',
+          textAnchor: 'middle',
+        },
         label: {
           fontWeight: 'bold',
           fill: '#8B8B8B',
           fontSize: 14,
-          refX: 10,
+          refX: 28,
           refY: 10,
           textAnchor: 'start',
           pointerEvents: 'none', // Don't block header clicks
+        },
+        noteIcon: {
+          text: '', // Will be set to 'i' when note exists
+          refX: '100%',
+          refX2: -20,
+          refY: 20,
+          fontSize: 12,
+          fontStyle: 'italic',
+          fontWeight: 'bold',
+          fill: '#666',
+          cursor: 'help',
+          pointerEvents: 'all',
+          textAnchor: 'middle',
+        },
+        noteTooltip: {
+          text: '', // Will contain the note text for SVG title tooltip
         },
       },
     },

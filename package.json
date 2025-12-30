@@ -2,10 +2,6 @@
   "name": "dbml-editor",
   "version": "0.5.0",
   "author": "Jingchao Di <alswlx@gmail.com>",
-  "engines": {
-    "node": ">=22.0.0 <23.0.0",
-    "pnpm": ">=9.0.0"
-  },
   "scripts": {
     "build": "max build",
     "dev": "max dev",
@@ -21,6 +17,7 @@
     "@antv/layout": "^0.3.25",
     "@antv/x6": "^2.18.1",
     "@antv/x6-plugin-snapline": "^2.1.7",
+    "@antv/x6-plugin-transform": "^2.1.8",
     "@antv/x6-react-shape": "^2.2.3",
     "@dbml/core": "^3.4.3",
     "@umijs/max": "^4.2.2",
@@ -41,5 +38,9 @@
     "prettier-plugin-organize-imports": "^3.2.2",
     "prettier-plugin-packagejson": "^2.4.3",
     "typescript": "^5.0.3"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23.0.0",
+    "pnpm": ">=9.0.0"
   }
 }

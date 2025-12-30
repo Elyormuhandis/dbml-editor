@@ -1,10 +1,10 @@
-import { exporter, importer, Parser } from '@dbml/core';
 import {
   ExportOutlined,
   ImportOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
+import { exporter, importer, Parser } from '@dbml/core';
 import { FloatButton, message, Modal, Select, Space } from 'antd';
 import { debounce } from 'lodash-es';
 import { useEffect, useRef, useState } from 'react';
@@ -47,8 +47,14 @@ export default () => {
 
   const [code, setCode] = useState(initialState.initialCode);
   const [database, setDatabase] = useState(initialState.initialDatabase);
-  const [tableGroupColors, setTableGroupColors] = useState<Record<string, string>>({});
+  const [tableGroupColors, setTableGroupColors] = useState<
+    Record<string, string>
+  >({});
+  const [tableGroupNotes, setTableGroupNotes] = useState<
+    Record<string, string>
+  >({});
   const tableGroupColorsRef = useRef<string>('{}');
+  const tableGroupNotesRef = useRef<string>('{}');
 
   const [importText, setImportText] = useState('');
   const [importFormat, setImportFormat] = useState<ImportFormat>('mysql');
@@ -113,7 +119,8 @@ export default () => {
       if (!isDragging || !containerRef.current) return;
 
       const containerRect = containerRef.current.getBoundingClientRect();
-      const newWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100;
+      const newWidth =
+        ((e.clientX - containerRect.left) / containerRect.width) * 100;
 
       // Constrain between 15% and 80%
       if (newWidth >= 15 && newWidth <= 80) {
@@ -127,8 +134,9 @@ export default () => {
       if (containerRef.current) {
         const containerRect = containerRef.current.getBoundingClientRect();
         const currentWidth =
-          ((containerRef.current.querySelector('.editor-panel')?.getBoundingClientRect().width ||
-            0) /
+          ((containerRef.current
+            .querySelector('.editor-panel')
+            ?.getBoundingClientRect().width || 0) /
             containerRect.width) *
           100;
         saveEditorWidth(currentWidth);
@@ -157,8 +165,9 @@ export default () => {
   useEffect(() => {
     const debouncedParse = debounce(() => {
       try {
-        // Preprocess TableGroup colors
-        const { processed, groupColors } = preprocessTableGroupColors(code);
+        // Preprocess TableGroup colors and notes
+        const { processed, groupColors, groupNotes } =
+          preprocessTableGroupColors(code);
 
         // Parse with preprocessed DBML
         const newDB = parserRef.current.parse(processed, 'dbmlv2');
@@ -169,6 +178,13 @@ export default () => {
         if (groupColorsStr !== tableGroupColorsRef.current) {
           tableGroupColorsRef.current = groupColorsStr;
           setTableGroupColors(groupColors);
+        }
+
+        // Only update tableGroupNotes if they've actually changed (avoid infinite loop)
+        const groupNotesStr = JSON.stringify(groupNotes);
+        if (groupNotesStr !== tableGroupNotesRef.current) {
+          tableGroupNotesRef.current = groupNotesStr;
+          setTableGroupNotes(groupNotes);
         }
 
         // Save original code to localStorage after successful parse
@@ -329,11 +345,21 @@ export default () => {
             {/* Toggle Button */}
             <FloatButton
               className="editor-toggle"
-              icon={isEditorCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              icon={
+                isEditorCollapsed ? (
+                  <MenuUnfoldOutlined />
+                ) : (
+                  <MenuFoldOutlined />
+                )
+              }
               tooltip={isEditorCollapsed ? 'Show Editor' : 'Hide Editor'}
               onClick={toggleEditor}
             />
-            <Viewer database={database} tableGroupColors={tableGroupColors} />
+            <Viewer
+              database={database}
+              tableGroupColors={tableGroupColors}
+              tableGroupNotes={tableGroupNotes}
+            />
           </div>
         </div>
       </PageContainer>
